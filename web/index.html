@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+  >
+
+  <title>SerialBot</title>
+
+  <link rel="stylesheet" href="/style.css">
+
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+
+<body>
+
+  <main class="app">
+
+    <section class="header">
+      <div class="logo">🎬</div>
+
+      <div>
+        <div class="title">SerialBot</div>
+        <div class="subtitle" id="episodeTitle">
+          Загрузка серии...
+        </div>
+      </div>
+    </section>
+
+
+    <section class="advertisement">
+
+      <div class="ad-label">
+        РЕКЛАМА
+      </div>
+
+      <div class="ad-content">
+
+        <div class="ad-icon">
+          ▶️
+        </div>
+
+        <h1>
+          Перед просмотром
+        </h1>
+
+        <p>
+          Небольшая рекламная пауза
+        </p>
+
+        <div class="timer" id="timer">
+          10
+        </div>
+
+        <p class="timer-text" id="timerText">
+          Подождите немного...
+        </p>
+
+      </div>
+
+    </section>
+
+
+    <section class="action">
+
+      <button
+        id="watchButton"
+        class="watch-button"
+        disabled
+      >
+        🔒 Подождите...
+      </button>
+
+      <div
+        id="status"
+        class="status"
+      >
+        Подготавливаем просмотр
+      </div>
+
+    </section>
+
+  </main>
+
+
+  <script src="/app.js"></script>
+
+</body>
+</html>
