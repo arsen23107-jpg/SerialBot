@@ -1,0 +1,9 @@
+{
+  "series": [
+    { "id": "last-flight", "title": "Последний рейс", "image": "posters/last-flight.png", "seasons": [{ "season": 1, "episodes": [{ "episode": 1, "video": "1.mp4" }, { "episode": 2, "video": "2.mp4" }] }] },
+    { "id": "dark-city", "title": "Тёмный город", "image": "posters/dark-city.png", "seasons": [{ "season": 1, "episodes": [{ "episode": 1, "video": "3.mp4" }, { "episode": 2, "video": "4.mp4" }] }] },
+    { "id": "beyond", "title": "За гранью", "image": "posters/beyond.png", "seasons": [{ "season": 1, "episodes": [{ "episode": 1, "video": "5.mp4" }, { "episode": 2, "video": "6.mp4" }] }] },
+    { "id": "code-23", "title": "Код 23", "image": "posters/code-23.png", "seasons": [{ "season": 1, "episodes": [{ "episode": 1, "video": "7.mp4" }, { "episode": 2, "video": "8.mp4" }] }] },
+    { "id": "zero-hour", "title": "Нулевой час", "image": "posters/zero-hour.png", "seasons": [{ "season": 1, "episodes": [{ "episode": 1, "video": "9.mp4" }, { "episode": 2, "video": "10.mp4" }] }] }
+  ]
+}

@@ -9,440 +9,165 @@ const crypto = require('crypto');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const PORT = process.env.PORT || 3000;
+const MINI_APP_URL = process.env.MINI_APP_URL;
+const DATA_PATH = path.join(__dirname, '..', 'data', 'videos.json');
 
-if (!BOT_TOKEN) {
-  console.error('ERROR: BOT_TOKEN is not configured in .env');
+if (!BOT_TOKEN || !MINI_APP_URL) {
+  console.error('ERROR: BOT_TOKEN and MINI_APP_URL must be configured in .env');
   process.exit(1);
 }
 
+const catalog = JSON.parse(fs.readFileSync(DATA_PATH, 'utf8'));
 const bot = new Telegraf(BOT_TOKEN);
 const app = express();
+const pendingGates = new Map();
 
 app.use(cors());
 app.use(express.json());
-
-/*
-|--------------------------------------------------------------------------
-| MINI APP
-|--------------------------------------------------------------------------
-*/
-
 app.use(express.static(path.join(__dirname, '..', 'web')));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'web', 'index.html')));
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'web', 'index.html'));
-});
-
-/*
-|--------------------------------------------------------------------------
-| TEST SERIES
-|--------------------------------------------------------------------------
-*/
-
-const episodes = Array.from({ length: 10 }, (_, index) => {
-  const number = index + 1;
-
-  return {
-    id: number,
-    title: `Серия ${number}`,
-    file: `${number}.mp4`
-  };
-});
-
-/*
-|--------------------------------------------------------------------------
-| HELPERS
-|--------------------------------------------------------------------------
-*/
-
-function getEpisode(episodeId) {
-  return episodes.find((episode) => episode.id === episodeId);
+function getSeries(seriesId) {
+  return catalog.series.find((series) => series.id === seriesId);
 }
 
-function getVideoPath(episode) {
-  return path.join(
-    __dirname,
-    '..',
-    'videos',
-    episode.file
-  );
+function getEpisode(seriesId, seasonNumber, episodeNumber) {
+  const series = getSeries(seriesId);
+  const season = series?.seasons.find((item) => item.season === Number(seasonNumber));
+  const episode = season?.episodes.find((item) => item.episode === Number(episodeNumber));
+  return series && season && episode ? { series, season, episode } : null;
 }
-
-/*
-|--------------------------------------------------------------------------
-| TELEGRAM MINI APP INIT DATA
-|--------------------------------------------------------------------------
-|
-| Telegram.WebApp.initData приходит из Mini App.
-| Сервер проверяет его подпись через BOT_TOKEN.
-|
-|--------------------------------------------------------------------------
-*/
 
 function verifyTelegramWebAppData(initData) {
-  if (!initData || typeof initData !== 'string') {
-    return null;
-  }
+  if (!initData || typeof initData !== 'string') return null;
 
   try {
     const params = new URLSearchParams(initData);
-
     const receivedHash = params.get('hash');
-
-    if (!receivedHash) {
-      return null;
-    }
-
+    if (!receivedHash) return null;
     params.delete('hash');
 
     const dataCheckString = [...params.entries()]
-      .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+      .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => `${key}=${value}`)
       .join('\n');
+    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+    const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
 
-    const secretKey = crypto
-      .createHmac('sha256', 'WebAppData')
-      .update(BOT_TOKEN)
-      .digest();
-
-    const calculatedHash = crypto
-      .createHmac('sha256', secretKey)
-      .update(dataCheckString)
-      .digest('hex');
-
-    const hashesAreEqual =
-      receivedHash.length === calculatedHash.length &&
-      crypto.timingSafeEqual(
-        Buffer.from(receivedHash),
-        Buffer.from(calculatedHash)
-      );
-
-    if (!hashesAreEqual) {
+    if (receivedHash.length !== calculatedHash.length || !crypto.timingSafeEqual(Buffer.from(receivedHash), Buffer.from(calculatedHash))) {
       return null;
     }
 
-    const userString = params.get('user');
-
-    if (!userString) {
-      return null;
-    }
-
-    const user = JSON.parse(userString);
-
-    if (!user || !user.id) {
-      return null;
-    }
-
-    return user;
+    const user = JSON.parse(params.get('user') || 'null');
+    return user?.id ? user : null;
   } catch (error) {
     console.error('Ошибка проверки Telegram initData:', error);
     return null;
   }
 }
 
-/*
-|--------------------------------------------------------------------------
-| HEALTH
-|--------------------------------------------------------------------------
-*/
+function miniAppUrl(seriesId, season, episode) {
+  const url = new URL(MINI_APP_URL);
+  url.searchParams.set('series', seriesId);
+  url.searchParams.set('season', season);
+  url.searchParams.set('episode', episode);
+  return url.toString();
+}
 
-app.get('/api/health', (req, res) => {
-  res.json({
-    ok: true,
-    message: 'SerialBot server is working'
+function navigationKeyboard(item) {
+  const { series, season, episode } = item;
+  const buttons = [];
+  if (episode.episode > 1) buttons.push(Markup.button.callback('⬅️ Назад', `nav:${series.id}:${season.season}:${episode.episode - 1}`));
+  buttons.push(Markup.button.callback(`Серия ${episode.episode}`, 'episode_info'));
+  if (episode.episode < season.episodes.length) buttons.push(Markup.button.callback('Вперёд ➡️', `nav:${series.id}:${season.season}:${episode.episode + 1}`));
+  return Markup.inlineKeyboard([buttons]);
+}
+
+async function sendEpisodeGate(chatId, userId, item) {
+  const { series, season, episode } = item;
+  const message = await bot.telegram.sendPhoto(chatId, { source: path.join(__dirname, '..', 'web', series.image) }, {
+    caption: `🎬 <b>${series.title}</b>\n\n${season.season} сезон • ${episode.episode} серия\n\nВидео откроется после просмотра рекламы.\n\nЖми кнопку «Смотреть рекламу», чтобы бесплатно открыть видео.`,
+    parse_mode: 'HTML',
+    ...Markup.inlineKeyboard([[Markup.button.webApp('▶️ Смотреть рекламу', miniAppUrl(series.id, season.season, episode.episode))]])
   });
-});
 
-/*
-|--------------------------------------------------------------------------
-| MINI APP CATALOG
-|--------------------------------------------------------------------------
-*/
+  pendingGates.set(String(userId), { chatId, messageId: message.message_id, seriesId: series.id, season: season.season, episode: episode.episode });
+}
 
-app.get('/api/episodes', (req, res) => {
-  res.json({
-    ok: true,
-    series: {
-      title: 'Тестовый сериал',
-      description: 'Все доступные серии в одном месте'
-    },
-    episodes: episodes.map((episode) => ({
-      id: episode.id,
-      title: episode.title
-    }))
-  });
-});
-
-/*
-|--------------------------------------------------------------------------
-| MINI APP WATCH
-|--------------------------------------------------------------------------
-*/
+app.get('/api/health', (req, res) => res.json({ ok: true, message: 'Rocket Cinema server is working' }));
 
 app.post('/api/watch', async (req, res) => {
   try {
-    const episodeId = Number(req.body?.episode);
-    const initData = req.body?.initData;
+    const user = verifyTelegramWebAppData(req.body?.initData);
+    const seriesId = req.body?.series;
+    const season = Number(req.body?.season);
+    const episodeNumber = Number(req.body?.episode);
+    const item = getEpisode(seriesId, season, episodeNumber);
+    const gate = pendingGates.get(String(user?.id));
 
-    if (!Number.isInteger(episodeId)) {
-      return res.status(400).json({
-        ok: false,
-        error: 'Некорректный номер серии'
-      });
+    if (!user) return res.status(401).json({ ok: false, error: 'Telegram initData недействителен' });
+    if (!item || !gate || gate.seriesId !== seriesId || gate.season !== season || gate.episode !== episodeNumber) {
+      return res.status(400).json({ ok: false, error: 'Рекламный доступ для этой серии не найден' });
     }
 
-    const episode = getEpisode(episodeId);
+    const videoPath = path.join(__dirname, '..', 'videos', item.episode.video);
+    if (!fs.existsSync(videoPath)) return res.status(404).json({ ok: false, error: 'Видео не найдено' });
 
-    if (!episode) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Серия не найдена'
-      });
-    }
-
-    const user = verifyTelegramWebAppData(initData);
-
-    if (!user) {
-      return res.status(401).json({
-        ok: false,
-        error: 'Telegram initData недействителен'
-      });
-    }
-
-    const videoPath = getVideoPath(episode);
-
-    if (!fs.existsSync(videoPath)) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Видео не найдено'
-      });
-    }
-
-    console.log('');
-    console.log('===== MINI APP WATCH =====');
-    console.log(`Telegram user ID: ${user.id}`);
-    console.log(`Username: ${user.username || 'нет'}`);
-    console.log(`Серия: ${episode.id}`);
-    console.log(`Файл: ${episode.file}`);
-    console.log('==========================');
-
-    await bot.telegram.sendVideo(
-      user.id,
-      {
-        source: videoPath
-      },
-      {
-        caption: `🎬 Тестовый сериал\n${episode.title}`
-      }
-    );
-
-    console.log(`Видео отправлено пользователю ${user.id}`);
-
-    return res.json({
-      ok: true,
-      message: 'Серия отправлена в Telegram'
+    pendingGates.delete(String(user.id));
+    await bot.telegram.deleteMessage(gate.chatId, gate.messageId).catch(() => undefined);
+    await bot.telegram.sendVideo(gate.chatId, { source: videoPath }, {
+      caption: `🎬 <b>${item.series.title}</b>\n${item.season.season} сезон • ${item.episode.episode} серия`,
+      parse_mode: 'HTML',
+      ...navigationKeyboard(item)
     });
+    return res.json({ ok: true, message: 'Серия отправлена в Telegram' });
   } catch (error) {
     console.error('Ошибка /api/watch:', error);
-
-    return res.status(500).json({
-      ok: false,
-      error: 'Не удалось отправить серию'
-    });
+    return res.status(500).json({ ok: false, error: 'Не удалось отправить серию' });
   }
 });
 
-/*
-|--------------------------------------------------------------------------
-| START
-|--------------------------------------------------------------------------
-*/
+bot.start((ctx) => ctx.reply('👋 <b>Привет, киноман!</b>\n\n🔎 Для поиска сериала нажми кнопку снизу.', {
+  parse_mode: 'HTML',
+  ...Markup.inlineKeyboard([[Markup.button.callback('🔎 Начать поиск', 'start_search')]])
+}));
 
-bot.start(async (ctx) => {
-  await ctx.reply(
-    '🎬 Добро пожаловать!\n\nВыбери сериал:',
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback(
-          '🍿 Тестовый сериал',
-          'series_test'
-        )
-      ]
-    ])
-  );
-});
-
-/*
-|--------------------------------------------------------------------------
-| SERIES
-|--------------------------------------------------------------------------
-*/
-
-bot.action('series_test', async (ctx) => {
+bot.action('start_search', async (ctx) => {
   await ctx.answerCbQuery();
-
-  const buttons = episodes.map((episode) => [
-    Markup.button.callback(
-      `▶️ ${episode.title}`,
-      `episode_${episode.id}`
-    )
-  ]);
-
-  await ctx.editMessageText(
-    '🍿 Тестовый сериал\n\nВыбери серию:',
-    Markup.inlineKeyboard(buttons)
-  );
+  const icons = ['🎬', '🌑', '🚪', '🔢', '⏰'];
+  await ctx.editMessageText('🔎 <b>Поиск сериалов</b>\n\nВыбери сериал из каталога:', {
+    parse_mode: 'HTML',
+    ...Markup.inlineKeyboard(catalog.series.map((series, index) => [Markup.button.callback(`${icons[index]} ${series.title}`, `series:${series.id}`)]))
+  });
 });
 
-/*
-|--------------------------------------------------------------------------
-| EPISODE
-|--------------------------------------------------------------------------
-*/
-
-bot.action(/^episode_(\d+)$/, async (ctx) => {
+bot.action(/^series:(.+)$/, async (ctx) => {
   await ctx.answerCbQuery();
-
-  const episodeId = Number(ctx.match[1]);
-  const episode = getEpisode(episodeId);
-
-  if (!episode) {
-    return ctx.reply('❌ Серия не найдена.');
-  }
-
-  await ctx.reply(
-    `🎬 ${episode.title}\n\n` +
-    `Видео: ${episode.file}\n\n` +
-    `Нажми кнопку ниже:`,
-    Markup.inlineKeyboard([
-      [
-        Markup.button.webApp(
-          '🌐 Открыть просмотр',
-          `https://example.com/?episode=${episode.id}`
-        )
-      ],
-      [
-        Markup.button.callback(
-          '▶️ Смотреть напрямую',
-          `watch_${episode.id}`
-        )
-      ],
-      [
-        Markup.button.callback(
-          '⬅️ К сериям',
-          'series_test'
-        )
-      ]
-    ])
-  );
+  const series = getSeries(ctx.match[1]);
+  if (!series) return ctx.reply('❌ Сериал не найден.');
+  await ctx.deleteMessage().catch(() => undefined);
+  const season = series.seasons[0];
+  return sendEpisodeGate(ctx.chat.id, ctx.from.id, { series, season, episode: season.episodes[0] });
 });
 
-/*
-|--------------------------------------------------------------------------
-| DIRECT VIDEO
-|--------------------------------------------------------------------------
-|
-| Старая рабочая функция остаётся.
-| Она нужна для проверки и как резервный вариант.
-|
-|--------------------------------------------------------------------------
-*/
-
-bot.action(/^watch_(\d+)$/, async (ctx) => {
+bot.action(/^nav:([^:]+):(\d+):(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
-
-  const episodeId = Number(ctx.match[1]);
-  const episode = getEpisode(episodeId);
-
-  if (!episode) {
-    return ctx.reply('❌ Серия не найдена.');
-  }
-
-  const videoPath = getVideoPath(episode);
-
-  console.log(`Запрошено видео: ${episode.file}`);
-  console.log(`Путь: ${videoPath}`);
-
-  if (!fs.existsSync(videoPath)) {
-    return ctx.reply(
-      `⚠️ Видео не найдено.\n\n` +
-      `Бот искал файл:\n${episode.file}\n\n` +
-      `Путь:\n${videoPath}`
-    );
-  }
-
-  try {
-    await ctx.replyWithVideo(
-      { source: videoPath },
-      {
-        caption: `🎬 Тестовый сериал\n${episode.title}`
-      }
-    );
-
-    console.log(`Видео отправлено: ${episode.file}`);
-  } catch (error) {
-    console.error('Ошибка отправки видео:', error);
-
-    await ctx.reply(
-      '❌ Не удалось отправить видео. ' +
-      'Посмотри ошибку в Terminal.'
-    );
-  }
+  const item = getEpisode(ctx.match[1], ctx.match[2], ctx.match[3]);
+  if (!item) return ctx.reply('❌ Серия не найдена.');
+  await ctx.deleteMessage().catch(() => undefined);
+  return sendEpisodeGate(ctx.chat.id, ctx.from.id, item);
 });
 
-/*
-|--------------------------------------------------------------------------
-| TEXT
-|--------------------------------------------------------------------------
-*/
+bot.action('episode_info', (ctx) => ctx.answerCbQuery('Текущая серия'));
+bot.on('text', (ctx) => ctx.reply('Используй /start, чтобы открыть поиск сериалов.'));
+bot.catch((error) => console.error('BOT ERROR:', error));
 
-bot.on('text', async (ctx) => {
-  await ctx.reply(
-    'Используй /start, чтобы открыть каталог.'
-  );
-});
+async function launch() {
+  await bot.telegram.setChatMenuButton({ menu_button: { type: 'default' } }).catch((error) => console.warn('Не удалось сбросить Menu Button:', error.description || error.message));
+  app.listen(PORT, () => console.log(`Rocket Cinema запущен: http://localhost:${PORT}`));
+  await bot.launch();
+}
 
-/*
-|--------------------------------------------------------------------------
-| ERRORS
-|--------------------------------------------------------------------------
-*/
-
-bot.catch((error) => {
-  console.error('BOT ERROR:', error);
-});
-
-/*
-|--------------------------------------------------------------------------
-| START SERVER
-|--------------------------------------------------------------------------
-*/
-
-app.listen(PORT, () => {
-  console.log('');
-  console.log('=================================');
-  console.log('SerialBot запущен');
-  console.log('=================================');
-  console.log(`HTTP: http://localhost:${PORT}`);
-  console.log('Telegram bot: ONLINE');
-  console.log('Mini App: ENABLED');
-  console.log('Видео: 1.mp4 — 10.mp4');
-  console.log('=================================');
-  console.log('');
-});
-
-bot.launch();
-
-/*
-|--------------------------------------------------------------------------
-| SHUTDOWN
-|--------------------------------------------------------------------------
-*/
-
-process.once('SIGINT', () => {
-  bot.stop('SIGINT');
-});
-
-process.once('SIGTERM', () => {
-  bot.stop('SIGTERM');
-});
+launch().catch((error) => { console.error('Не удалось запустить Rocket Cinema:', error); process.exit(1); });
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
