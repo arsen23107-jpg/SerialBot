@@ -8,7 +8,7 @@
     content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
   >
 
-  <title>SerialBot</title>
+  <title>Rocket Cinema</title>
 
   <link rel="stylesheet" href="/style.css">
 
@@ -17,73 +17,57 @@
 
 <body>
 
-  <main class="app">
+  <main class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="Rocket Cinema">
+        <span class="brand-mark">R</span>
+        <span>Rocket <b>Cinema</b></span>
+      </a>
+      <span class="profile-badge" id="profileBadge">RC</span>
+    </header>
 
-    <section class="header">
-      <div class="logo">🎬</div>
-
-      <div>
-        <div class="title">SerialBot</div>
-        <div class="subtitle" id="episodeTitle">
-          Загрузка серии...
-        </div>
-      </div>
-    </section>
-
-
-    <section class="advertisement">
-
-      <div class="ad-label">
-        РЕКЛАМА
-      </div>
-
-      <div class="ad-content">
-
-        <div class="ad-icon">
-          ▶️
-        </div>
-
-        <h1>
-          Перед просмотром
-        </h1>
-
-        <p>
-          Небольшая рекламная пауза
-        </p>
-
-        <div class="timer" id="timer">
-          10
-        </div>
-
-        <p class="timer-text" id="timerText">
-          Подождите немного...
-        </p>
-
-      </div>
-
-    </section>
-
-
-    <section class="action">
-
-      <button
-        id="watchButton"
-        class="watch-button"
-        disabled
-      >
-        🔒 Подождите...
+    <section class="hero" id="top">
+      <div class="hero-glow"></div>
+      <p class="eyebrow">ROCKET ORIGINAL</p>
+      <h1>Время для<br><em>новой истории</em></h1>
+      <p class="hero-copy">Выбирайте серию — мы отправим её прямо в ваш Telegram.</p>
+      <button class="primary-button" id="heroWatchButton" type="button">
+        <span>▶</span> Смотреть каталог
       </button>
-
-      <div
-        id="status"
-        class="status"
-      >
-        Подготавливаем просмотр
+      <div class="hero-meta">
+        <span>2026</span><span>10 серий</span><span>HD</span>
       </div>
-
     </section>
 
+    <section class="catalog" id="catalog">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">КАТАЛОГ</p>
+          <h2 id="catalogTitle">Загрузка каталога</h2>
+        </div>
+        <span class="episode-count" id="episodeCount">—</span>
+      </div>
+      <p class="catalog-description" id="catalogDescription">Подготавливаем доступные серии…</p>
+      <div class="series-grid" id="seriesGrid" aria-live="polite">
+        <div class="loading-card">Загружаем серии…</div>
+      </div>
+    </section>
   </main>
+
+  <section class="ad-modal" id="adModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="adTitle">
+    <div class="ad-backdrop"></div>
+    <div class="ad-card">
+      <button class="close-button" id="closeAdButton" type="button" aria-label="Закрыть">×</button>
+      <p class="eyebrow">РЕКЛАМНАЯ ПАУЗА</p>
+      <div class="ad-icon">▶</div>
+      <h2 id="adTitle">Готовим серию</h2>
+      <p id="selectedEpisode">Серия скоро будет у вас</p>
+      <div class="timer" id="timer">10</div>
+      <p class="timer-text" id="timerText">Подождите немного…</p>
+      <button id="watchButton" class="watch-button" type="button" disabled>Подождите…</button>
+      <p id="status" class="status">Реклама начнётся автоматически</p>
+    </div>
+  </section>
 
 
   <script src="/app.js"></script>
