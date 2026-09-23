@@ -38,6 +38,20 @@ function getEpisode(seriesId, seasonNumber, episodeNumber) {
   return series && season && episode ? { series, season, episode } : null;
 }
 
+function normalizeSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+function findSeries(query) {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return [];
+  return catalog.series.filter((series) => normalizeSearchText(series.title).includes(normalizedQuery));
+}
+
 function verifyTelegramWebAppData(initData) {
   if (!initData || typeof initData !== 'string') return null;
 
@@ -80,7 +94,50 @@ function navigationKeyboard(item) {
   if (episode.episode > 1) buttons.push(Markup.button.callback('⬅️ Назад', `nav:${series.id}:${season.season}:${episode.episode - 1}`));
   buttons.push(Markup.button.callback(`Серия ${episode.episode}`, 'episode_info'));
   if (episode.episode < season.episodes.length) buttons.push(Markup.button.callback('Вперёд ➡️', `nav:${series.id}:${season.season}:${episode.episode + 1}`));
-  return Markup.inlineKeyboard([buttons]);
+  return Markup.inlineKeyboard([buttons, [Markup.button.callback('🔎 К каталогу', 'start_search')]]);
+}
+
+function seriesCaption(series, seasonNumber = series.seasons[0]?.season) {
+  const season = series.seasons.find((item) => item.season === Number(seasonNumber)) || series.seasons[0];
+  const episodeCount = season?.episodes.length || 0;
+  return `🎬 <b>${series.title}</b>\n\n${season.season} сезон • ${episodeCount} ${episodeCount === 1 ? 'серия' : 'серии'}\n\nВыбери серию. Каждая серия открывается после просмотра рекламы.`;
+}
+
+function seriesKeyboard(series, selectedSeason = series.seasons[0]?.season) {
+  const season = series.seasons.find((item) => item.season === Number(selectedSeason)) || series.seasons[0];
+  const seasonButtons = series.seasons.map((item) => Markup.button.callback(
+    `${item.season === season.season ? '✓ ' : ''}${item.season} сезон`,
+    `season:${series.id}:${item.season}`
+  ));
+  const episodeButtons = season.episodes.map((item) => Markup.button.callback(
+    `▶️ Серия ${item.episode}`,
+    `episode:${series.id}:${season.season}:${item.episode}`
+  ));
+
+  return Markup.inlineKeyboard([
+    seasonButtons,
+    episodeButtons,
+    [Markup.button.callback('🔎 К каталогу', 'start_search')]
+  ]);
+}
+
+async function sendSeriesCard(chatId, series, seasonNumber) {
+  const imagePath = path.join(__dirname, '..', 'web', series.image);
+  const options = {
+    caption: seriesCaption(series, seasonNumber),
+    parse_mode: 'HTML',
+    ...seriesKeyboard(series, seasonNumber)
+  };
+
+  if (fs.existsSync(imagePath)) return bot.telegram.sendPhoto(chatId, { source: imagePath }, options);
+  return bot.telegram.sendMessage(chatId, seriesCaption(series, seasonNumber), options);
+}
+
+function catalogKeyboard() {
+  const icons = ['🎬', '🌑', '🚪', '🔢', '⏰'];
+  return Markup.inlineKeyboard(catalog.series.map((series, index) => [
+    Markup.button.callback(`${icons[index]} ${series.title}`, `series:${series.id}`)
+  ]));
 }
 
 async function sendEpisodeGate(chatId, userId, item) {
@@ -134,10 +191,10 @@ bot.start((ctx) => ctx.reply('👋 <b>Привет, киноман!</b>\n\n🔎 
 
 bot.action('start_search', async (ctx) => {
   await ctx.answerCbQuery();
-  const icons = ['🎬', '🌑', '🚪', '🔢', '⏰'];
-  await ctx.editMessageText('🔎 <b>Поиск сериалов</b>\n\nВыбери сериал из каталога:', {
+  await ctx.deleteMessage().catch(() => undefined);
+  await ctx.reply('🔎 <b>Поиск сериалов</b>\n\nВыбери сериал из каталога:', {
     parse_mode: 'HTML',
-    ...Markup.inlineKeyboard(catalog.series.map((series, index) => [Markup.button.callback(`${icons[index]} ${series.title}`, `series:${series.id}`)]))
+    ...catalogKeyboard()
   });
 });
 
@@ -146,8 +203,26 @@ bot.action(/^series:(.+)$/, async (ctx) => {
   const series = getSeries(ctx.match[1]);
   if (!series) return ctx.reply('❌ Сериал не найден.');
   await ctx.deleteMessage().catch(() => undefined);
-  const season = series.seasons[0];
-  return sendEpisodeGate(ctx.chat.id, ctx.from.id, { series, season, episode: season.episodes[0] });
+  return sendSeriesCard(ctx.chat.id, series);
+});
+
+bot.action(/^season:([^:]+):(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const series = getSeries(ctx.match[1]);
+  const season = series?.seasons.find((item) => item.season === Number(ctx.match[2]));
+  if (!series || !season) return ctx.reply('❌ Сезон не найден.');
+  return ctx.editMessageCaption(seriesCaption(series, season.season), {
+    parse_mode: 'HTML',
+    ...seriesKeyboard(series, season.season)
+  });
+});
+
+bot.action(/^episode:([^:]+):(\d+):(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const item = getEpisode(ctx.match[1], ctx.match[2], ctx.match[3]);
+  if (!item) return ctx.reply('❌ Серия не найдена.');
+  await ctx.deleteMessage().catch(() => undefined);
+  return sendEpisodeGate(ctx.chat.id, ctx.from.id, item);
 });
 
 bot.action(/^nav:([^:]+):(\d+):(\d+)$/, async (ctx) => {
@@ -159,7 +234,19 @@ bot.action(/^nav:([^:]+):(\d+):(\d+)$/, async (ctx) => {
 });
 
 bot.action('episode_info', (ctx) => ctx.answerCbQuery('Текущая серия'));
-bot.on('text', (ctx) => ctx.reply('Используй /start, чтобы открыть поиск сериалов.'));
+bot.on('text', async (ctx) => {
+  const query = ctx.message.text.trim();
+  if (!query || query.startsWith('/')) return ctx.reply('Используй /start, чтобы открыть поиск сериалов.');
+
+  const matches = findSeries(query);
+  if (!matches.length) return ctx.reply(`🔎 По запросу «${query}» ничего не найдено.\n\nПопробуй: Последний рейс, Тёмный город, За гранью, Код 23 или Нулевой час.`);
+  if (matches.length === 1) return sendSeriesCard(ctx.chat.id, matches[0]);
+
+  return ctx.reply('🔎 <b>Результаты поиска</b>\n\nВыбери сериал:', {
+    parse_mode: 'HTML',
+    ...Markup.inlineKeyboard(matches.map((series) => [Markup.button.callback(`🎬 ${series.title}`, `series:${series.id}`)]))
+  });
+});
 bot.catch((error) => console.error('BOT ERROR:', error));
 
 async function launch() {
