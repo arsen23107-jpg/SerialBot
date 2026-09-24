@@ -21,6 +21,7 @@ const catalog = JSON.parse(fs.readFileSync(DATA_PATH, 'utf8'));
 const bot = new Telegraf(BOT_TOKEN);
 const app = express();
 const pendingGates = new Map();
+const pendingSearches = new Set();
 
 app.use(cors());
 app.use(express.json());
@@ -92,52 +93,47 @@ function navigationKeyboard(item) {
   const { series, season, episode } = item;
   const buttons = [];
   if (episode.episode > 1) buttons.push(Markup.button.callback('⬅️ Назад', `nav:${series.id}:${season.season}:${episode.episode - 1}`));
-  buttons.push(Markup.button.callback(`Серия ${episode.episode}`, 'episode_info'));
+  buttons.push(Markup.button.callback(`Серия ${episode.episode}`, `episodes:${series.id}:${season.season}`));
   if (episode.episode < season.episodes.length) buttons.push(Markup.button.callback('Вперёд ➡️', `nav:${series.id}:${season.season}:${episode.episode + 1}`));
-  return Markup.inlineKeyboard([buttons, [Markup.button.callback('🔎 К каталогу', 'start_search')]]);
+  return Markup.inlineKeyboard([buttons, [Markup.button.callback('🔎 Новый поиск', 'start_search')]]);
 }
 
-function seriesCaption(series, seasonNumber = series.seasons[0]?.season) {
-  const season = series.seasons.find((item) => item.season === Number(seasonNumber)) || series.seasons[0];
-  const episodeCount = season?.episodes.length || 0;
-  return `🎬 <b>${series.title}</b>\n\n${season.season} сезон • ${episodeCount} ${episodeCount === 1 ? 'серия' : 'серии'}\n\nВыбери серию. Каждая серия открывается после просмотра рекламы.`;
+function seriesCaption(series) {
+  const seasonCount = series.seasons.length;
+  return `🎬 <b>${series.title}</b>\n\nДоступно сезонов: ${seasonCount}\n\nВыбери сезон, затем серию. Каждая серия открывается после просмотра рекламы.`;
 }
 
-function seriesKeyboard(series, selectedSeason = series.seasons[0]?.season) {
-  const season = series.seasons.find((item) => item.season === Number(selectedSeason)) || series.seasons[0];
-  const seasonButtons = series.seasons.map((item) => Markup.button.callback(
-    `${item.season === season.season ? '✓ ' : ''}${item.season} сезон`,
-    `season:${series.id}:${item.season}`
-  ));
-  const episodeButtons = season.episodes.map((item) => Markup.button.callback(
-    `▶️ Серия ${item.episode}`,
-    `episode:${series.id}:${season.season}:${item.episode}`
-  ));
-
+function seriesKeyboard(series) {
   return Markup.inlineKeyboard([
-    seasonButtons,
-    episodeButtons,
-    [Markup.button.callback('🔎 К каталогу', 'start_search')]
+    [Markup.button.callback('🎞 Выбрать сезон', `seasons:${series.id}`)],
+    [Markup.button.callback('🔎 Новый поиск', 'start_search')]
   ]);
 }
 
-async function sendSeriesCard(chatId, series, seasonNumber) {
+function seasonsKeyboard(series) {
+  return Markup.inlineKeyboard([
+    ...series.seasons.map((item) => [Markup.button.callback(`${item.season} сезон`, `episodes:${series.id}:${item.season}`)]),
+    [Markup.button.callback('⬅️ К сериалу', `series:${series.id}`)]
+  ]);
+}
+
+function episodesKeyboard(series, season) {
+  return Markup.inlineKeyboard([
+    ...season.episodes.map((item) => [Markup.button.callback(String(item.episode), `episode:${series.id}:${season.season}:${item.episode}`)]),
+    [Markup.button.callback('⬅️ К сезонам', `seasons:${series.id}`)]
+  ]);
+}
+
+async function sendSeriesCard(chatId, series) {
   const imagePath = path.join(__dirname, '..', 'web', series.image);
   const options = {
-    caption: seriesCaption(series, seasonNumber),
+    caption: seriesCaption(series),
     parse_mode: 'HTML',
-    ...seriesKeyboard(series, seasonNumber)
+    ...seriesKeyboard(series)
   };
 
   if (fs.existsSync(imagePath)) return bot.telegram.sendPhoto(chatId, { source: imagePath }, options);
-  return bot.telegram.sendMessage(chatId, seriesCaption(series, seasonNumber), options);
-}
-
-function catalogKeyboard() {
-  const icons = ['🎬', '🌑', '🚪', '🔢', '⏰'];
-  return Markup.inlineKeyboard(catalog.series.map((series, index) => [
-    Markup.button.callback(`${icons[index]} ${series.title}`, `series:${series.id}`)
-  ]));
+  return bot.telegram.sendMessage(chatId, seriesCaption(series), options);
 }
 
 async function sendEpisodeGate(chatId, userId, item) {
@@ -192,10 +188,8 @@ bot.start((ctx) => ctx.reply('👋 <b>Привет, киноман!</b>\n\n🔎 
 bot.action('start_search', async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.deleteMessage().catch(() => undefined);
-  await ctx.reply('🔎 <b>Поиск сериалов</b>\n\nВыбери сериал из каталога:', {
-    parse_mode: 'HTML',
-    ...catalogKeyboard()
-  });
+  pendingSearches.add(String(ctx.from.id));
+  await ctx.reply('🔎 <b>Поиск сериалов</b>\n\nНапиши название сериала или фильма сообщением.', { parse_mode: 'HTML' });
 });
 
 bot.action(/^series:(.+)$/, async (ctx) => {
@@ -206,14 +200,24 @@ bot.action(/^series:(.+)$/, async (ctx) => {
   return sendSeriesCard(ctx.chat.id, series);
 });
 
-bot.action(/^season:([^:]+):(\d+)$/, async (ctx) => {
+bot.action(/^seasons:([^:]+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const series = getSeries(ctx.match[1]);
+  if (!series) return ctx.reply('❌ Сериал не найден.');
+  return ctx.editMessageCaption(`🎬 <b>${series.title}</b>\n\nВыбери сезон:`, {
+    parse_mode: 'HTML',
+    ...seasonsKeyboard(series)
+  });
+});
+
+bot.action(/^episodes:([^:]+):(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   const series = getSeries(ctx.match[1]);
   const season = series?.seasons.find((item) => item.season === Number(ctx.match[2]));
   if (!series || !season) return ctx.reply('❌ Сезон не найден.');
-  return ctx.editMessageCaption(seriesCaption(series, season.season), {
+  return ctx.editMessageCaption(`🎬 <b>${series.title}</b>\n\n${season.season} сезон\n\nВыбери серию:`, {
     parse_mode: 'HTML',
-    ...seriesKeyboard(series, season.season)
+    ...episodesKeyboard(series, season)
   });
 });
 
@@ -233,13 +237,18 @@ bot.action(/^nav:([^:]+):(\d+):(\d+)$/, async (ctx) => {
   return sendEpisodeGate(ctx.chat.id, ctx.from.id, item);
 });
 
-bot.action('episode_info', (ctx) => ctx.answerCbQuery('Текущая серия'));
 bot.on('text', async (ctx) => {
   const query = ctx.message.text.trim();
   if (!query || query.startsWith('/')) return ctx.reply('Используй /start, чтобы открыть поиск сериалов.');
 
+  const waitingForSearch = pendingSearches.delete(String(ctx.from.id));
+  if (!waitingForSearch) return ctx.reply('Нажми «🔎 Начать поиск», затем напиши название сериала.');
+
   const matches = findSeries(query);
-  if (!matches.length) return ctx.reply(`🔎 По запросу «${query}» ничего не найдено.\n\nПопробуй: Последний рейс, Тёмный город, За гранью, Код 23 или Нулевой час.`);
+  if (!matches.length) {
+    pendingSearches.add(String(ctx.from.id));
+    return ctx.reply(`🔎 По запросу «${query}» ничего не найдено.\n\nПопробуй: Последний рейс, Тёмный город, За гранью, Код 23 или Нулевой час.`);
+  }
   if (matches.length === 1) return sendSeriesCard(ctx.chat.id, matches[0]);
 
   return ctx.reply('🔎 <b>Результаты поиска</b>\n\nВыбери сериал:', {
@@ -250,6 +259,7 @@ bot.on('text', async (ctx) => {
 bot.catch((error) => console.error('BOT ERROR:', error));
 
 async function launch() {
+  await bot.telegram.deleteMyCommands().catch((error) => console.warn('Не удалось очистить команды:', error.description || error.message));
   await bot.telegram.setChatMenuButton({ menu_button: { type: 'default' } }).catch((error) => console.warn('Не удалось сбросить Menu Button:', error.description || error.message));
   app.listen(PORT, () => console.log(`Rocket Cinema запущен: http://localhost:${PORT}`));
   await bot.launch();
