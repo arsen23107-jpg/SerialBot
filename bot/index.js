@@ -251,12 +251,20 @@ bot.on('inline_query', async (ctx) => {
     description: `${series.seasons.length} сезон(а) • выбери сезон и серию`,
     thumb_url: publicAssetUrl(series.image),
     input_message_content: {
-      message_text: seriesCaption(series),
-      parse_mode: 'HTML'
+      message_text: '⌛ Открываем сериал…'
     },
-    reply_markup: seriesKeyboard(series).reply_markup
+    reply_markup: { inline_keyboard: [] }
   }));
   await ctx.answerInlineQuery(results, { cache_time: 0, is_personal: true });
+});
+
+bot.on('chosen_inline_result', async (ctx) => {
+  const series = getSeries(ctx.chosenInlineResult.result_id);
+  if (!series) return;
+  await sendSeriesCard(ctx.from.id, series);
+  if (ctx.chosenInlineResult.inline_message_id) {
+    await ctx.telegram.editMessageText(undefined, ctx.chosenInlineResult.inline_message_id, undefined, '✅ Сериал открыт').catch(() => undefined);
+  }
 });
 
 bot.on('text', async (ctx) => {
