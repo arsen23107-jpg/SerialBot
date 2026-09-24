@@ -22,6 +22,7 @@ const bot = new Telegraf(BOT_TOKEN);
 const app = express();
 const pendingGates = new Map();
 const pendingSearches = new Set();
+const searchGreetings = new Map();
 
 app.use(cors());
 app.use(express.json());
@@ -184,10 +185,14 @@ app.post('/api/watch', async (req, res) => {
   }
 });
 
-bot.start((ctx) => ctx.reply('👋 <b>Привет, киноман!</b>\n\n🔎 Для поиска сериала нажми кнопку снизу.', {
-  parse_mode: 'HTML',
-  ...Markup.inlineKeyboard([[Markup.button.switchToCurrentChat('🔎 Начать поиск', '')]])
-}));
+bot.start(async (ctx) => {
+  await ctx.deleteMessage().catch(() => undefined);
+  const greeting = await ctx.reply('👋 <b>Привет, киноман!</b>\n\n🔎 Для поиска сериала нажми кнопку снизу.', {
+    parse_mode: 'HTML',
+    ...Markup.inlineKeyboard([[Markup.button.switchToCurrentChat('🔎 Начать поиск', '')]])
+  });
+  searchGreetings.set(String(ctx.from.id), { chatId: ctx.chat.id, messageId: greeting.message_id });
+});
 
 bot.action('start_search', async (ctx) => {
   await ctx.answerCbQuery();
@@ -261,11 +266,20 @@ bot.on('inline_query', async (ctx) => {
 bot.on('chosen_inline_result', async (ctx) => {
   const series = getSeries(ctx.chosenInlineResult.result_id);
   if (!series) return;
+  const greeting = searchGreetings.get(String(ctx.from.id));
+  if (greeting) {
+    await bot.telegram.deleteMessage(greeting.chatId, greeting.messageId).catch(() => undefined);
+    searchGreetings.delete(String(ctx.from.id));
+  }
   await sendSeriesCard(ctx.from.id, series);
 });
 
 bot.on('text', async (ctx) => {
   const query = ctx.message.text.trim();
+  if (query === '\u2063') {
+    await ctx.deleteMessage().catch(() => undefined);
+    return;
+  }
   if (!query || query.startsWith('/')) return ctx.reply('Используй /start, чтобы открыть поиск сериалов.');
 
   const waitingForSearch = pendingSearches.delete(String(ctx.from.id));
@@ -289,7 +303,7 @@ async function launch() {
   await bot.telegram.deleteMyCommands().catch((error) => console.warn('Не удалось очистить команды:', error.description || error.message));
   await bot.telegram.setChatMenuButton({ menu_button: { type: 'default' } }).catch((error) => console.warn('Не удалось сбросить Menu Button:', error.description || error.message));
   app.listen(PORT, () => console.log(`Rocket Cinema запущен: http://localhost:${PORT}`));
-  await bot.launch();
+  await bot.launch({ allowedUpdates: ['message', 'callback_query', 'inline_query', 'chosen_inline_result'] });
 }
 
 launch().catch((error) => { console.error('Не удалось запустить Rocket Cinema:', error); process.exit(1); });
