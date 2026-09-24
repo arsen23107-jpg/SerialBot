@@ -23,6 +23,7 @@ const app = express();
 const pendingGates = new Map();
 const pendingSearches = new Set();
 const searchGreetings = new Map();
+const INLINE_MARKER_PREFIX = '\u2063';
 
 app.use(cors());
 app.use(express.json());
@@ -52,6 +53,18 @@ function findSeries(query) {
   const normalizedQuery = normalizeSearchText(query);
   if (!normalizedQuery) return [];
   return catalog.series.filter((series) => normalizeSearchText(series.title).includes(normalizedQuery));
+}
+
+function inlineResultMarker(seriesId) {
+  const index = catalog.series.findIndex((series) => series.id === seriesId);
+  return `${INLINE_MARKER_PREFIX}${'\u200B'.repeat(index + 1)}`;
+}
+
+async function removeSearchGreeting(userId) {
+  const greeting = searchGreetings.get(String(userId));
+  if (!greeting) return;
+  await bot.telegram.deleteMessage(greeting.chatId, greeting.messageId).catch(() => undefined);
+  searchGreetings.delete(String(userId));
 }
 
 function verifyTelegramWebAppData(initData) {
@@ -256,30 +269,22 @@ bot.on('inline_query', async (ctx) => {
     description: `${series.seasons.length} сезон(а) • выбери сезон и серию`,
     thumb_url: publicAssetUrl(series.image),
     input_message_content: {
-      message_text: '\u2063'
+      message_text: inlineResultMarker(series.id)
     },
     reply_markup: { inline_keyboard: [] }
   }));
   await ctx.answerInlineQuery(results, { cache_time: 0, is_personal: true });
 });
 
-bot.on('chosen_inline_result', async (ctx) => {
-  const series = getSeries(ctx.chosenInlineResult.result_id);
-  if (!series) return;
-  const greeting = searchGreetings.get(String(ctx.from.id));
-  if (greeting) {
-    await bot.telegram.deleteMessage(greeting.chatId, greeting.messageId).catch(() => undefined);
-    searchGreetings.delete(String(ctx.from.id));
-  }
-  await sendSeriesCard(ctx.from.id, series);
-});
-
 bot.on('text', async (ctx) => {
-  const query = ctx.message.text.trim();
-  if (query === '\u2063') {
+  const rawText = ctx.message.text || '';
+  const inlineSeries = catalog.series.find((series) => rawText === inlineResultMarker(series.id));
+  if (inlineSeries) {
     await ctx.deleteMessage().catch(() => undefined);
-    return;
+    await removeSearchGreeting(ctx.from.id);
+    return sendSeriesCard(ctx.chat.id, inlineSeries);
   }
+  const query = rawText.trim();
   if (!query || query.startsWith('/')) return ctx.reply('Используй /start, чтобы открыть поиск сериалов.');
 
   const waitingForSearch = pendingSearches.delete(String(ctx.from.id));
