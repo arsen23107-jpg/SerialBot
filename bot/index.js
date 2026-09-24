@@ -99,7 +99,7 @@ function navigationKeyboard(item) {
   if (episode.episode > 1) buttons.push(Markup.button.callback('⬅️ Назад', `nav:${series.id}:${season.season}:${episode.episode - 1}`));
   buttons.push(Markup.button.callback(`Серия ${episode.episode}`, `episodes:${series.id}:${season.season}`));
   if (episode.episode < season.episodes.length) buttons.push(Markup.button.callback('Вперёд ➡️', `nav:${series.id}:${season.season}:${episode.episode + 1}`));
-  return Markup.inlineKeyboard([buttons, [Markup.button.callback('🔎 Новый поиск', 'start_search')]]);
+  return Markup.inlineKeyboard([buttons, [Markup.button.switchToCurrentChat('🔎 Новый поиск', '')]]);
 }
 
 function seriesCaption(series) {
@@ -110,7 +110,7 @@ function seriesCaption(series) {
 function seriesKeyboard(series) {
   return Markup.inlineKeyboard([
     [Markup.button.callback('🎞 Выбрать сезон', `seasons:${series.id}`)],
-    [Markup.button.callback('🔎 Новый поиск', 'start_search')]
+    [Markup.button.switchToCurrentChat('🔎 Новый поиск', '')]
   ]);
 }
 
@@ -186,7 +186,7 @@ app.post('/api/watch', async (req, res) => {
 
 bot.start((ctx) => ctx.reply('👋 <b>Привет, киноман!</b>\n\n🔎 Для поиска сериала нажми кнопку снизу.', {
   parse_mode: 'HTML',
-  ...Markup.inlineKeyboard([[Markup.button.callback('🔎 Начать поиск', 'start_search')]])
+  ...Markup.inlineKeyboard([[Markup.button.switchToCurrentChat('🔎 Начать поиск', '')]])
 }));
 
 bot.action('start_search', async (ctx) => {
