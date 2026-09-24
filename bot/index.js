@@ -89,6 +89,10 @@ function miniAppUrl(seriesId, season, episode) {
   return url.toString();
 }
 
+function publicAssetUrl(relativePath) {
+  return new URL(relativePath, MINI_APP_URL.endsWith('/') ? MINI_APP_URL : `${MINI_APP_URL}/`).toString();
+}
+
 function navigationKeyboard(item) {
   const { series, season, episode } = item;
   const buttons = [];
@@ -235,6 +239,24 @@ bot.action(/^nav:([^:]+):(\d+):(\d+)$/, async (ctx) => {
   if (!item) return ctx.reply('❌ Серия не найдена.');
   await ctx.deleteMessage().catch(() => undefined);
   return sendEpisodeGate(ctx.chat.id, ctx.from.id, item);
+});
+
+bot.on('inline_query', async (ctx) => {
+  const query = ctx.inlineQuery.query.trim();
+  const matches = query ? findSeries(query) : catalog.series;
+  const results = matches.map((series) => ({
+    type: 'article',
+    id: series.id,
+    title: series.title,
+    description: `${series.seasons.length} сезон(а) • выбери сезон и серию`,
+    thumb_url: publicAssetUrl(series.image),
+    input_message_content: {
+      message_text: seriesCaption(series),
+      parse_mode: 'HTML'
+    },
+    reply_markup: seriesKeyboard(series).reply_markup
+  }));
+  await ctx.answerInlineQuery(results, { cache_time: 0, is_personal: true });
 });
 
 bot.on('text', async (ctx) => {
